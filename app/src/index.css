@@ -174,3 +174,49 @@ a {
   border-radius: 0.5rem;
   padding: 0.6rem;
 }
+
+.session-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.attendance-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-weight: 600;
+}
+
+.attendance-grid {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.attendance-grid-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px 90px;
+  align-items: center;
+  gap: 0.5rem;
+  background: #1f2937;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.65rem;
+}
+
+.attendance-grid-header {
+  background: #0b1220;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.attendance-toggle {
+  display: flex;
+  justify-content: center;
+}
+
+.attendance-toggle input {
+  width: 1rem;
+  height: 1rem;
+}
