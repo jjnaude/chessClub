@@ -360,7 +360,12 @@ export function AdminSessionPage() {
     const today = new Date().toISOString().slice(0, 10)
     const { error: insertError } = await supabase.from('club_sessions').insert({ session_date: today, status: 'open', created_by: user.id })
     if (insertError) {
-      setError(insertError.message)
+      if (insertError.code === '23505') {
+        setError('A session already exists for today. Reuse that session instead of opening a new one.')
+      } else {
+        setError(insertError.message)
+      }
+      await loadData()
       setIsOpeningSession(false)
       return
     }
