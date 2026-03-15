@@ -19,7 +19,6 @@ type PlayerAccount = {
   player_id: string
   user_id: string
   players: { full_name: string }[] | null
-  profiles: { display_name: string }[] | null
 }
 
 export function AdminPlayerAccountsPage() {
@@ -40,7 +39,7 @@ export function AdminPlayerAccountsPage() {
       supabase.from('profiles').select('user_id,display_name,role').order('display_name'),
       supabase
         .from('player_accounts')
-        .select('player_id,user_id,players(full_name),profiles(display_name)'),
+        .select('player_id,user_id,players(full_name)'),
     ])
 
     if (playersResult.error || profilesResult.error || accountsResult.error) {
@@ -67,7 +66,7 @@ export function AdminPlayerAccountsPage() {
         supabase.from('profiles').select('user_id,display_name,role').order('display_name'),
         supabase
           .from('player_accounts')
-          .select('player_id,user_id,players(full_name),profiles(display_name)'),
+          .select('player_id,user_id,players(full_name)'),
       ])
 
       if (!active) {
@@ -180,7 +179,9 @@ export function AdminPlayerAccountsPage() {
         <div className="mapping-list">
           {accounts.map((account) => (
             <div className="mapping-row" key={`${account.player_id}:${account.user_id}`}>
-              <span>{account.profiles?.[0]?.display_name ?? account.user_id}</span>
+              <span>
+                {profiles.find((profile) => profile.user_id === account.user_id)?.display_name ?? account.user_id}
+              </span>
               <span>→</span>
               <span>{account.players?.[0]?.full_name ?? account.player_id}</span>
               <Button variant="secondary" onClick={() => void handleDelete(account.player_id, account.user_id)}>
