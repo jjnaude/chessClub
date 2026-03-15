@@ -357,11 +357,48 @@ export function AdminSessionPage() {
     if (!user) return
     setIsOpeningSession(true)
     setError(null)
+
     const today = new Date().toISOString().slice(0, 10)
-    const { error: insertError } = await supabase.from('club_sessions').insert({ session_date: today, status: 'open', created_by: user.id })
+    const todaysSessionResult = await supabase
+      .from('club_sessions')
+      .select('id,status')
+      .eq('session_date', today)
+      .maybeSingle()
+
+    if (todaysSessionResult.error) {
+      setError(todaysSessionResult.error.message)
+      setIsOpeningSession(false)
+      return
+    }
+
+    if (todaysSessionResult.data) {
+      const { status } = todaysSessionResult.data
+
+      if (status === 'completed') {
+        const { error: reopenError } = await supabase
+          .from('club_sessions')
+          .update({ status: 'open', updated_by: user.id })
+          .eq('id', todaysSessionResult.data.id)
+
+        if (reopenError) {
+          setError(reopenError.message)
+          await loadData()
+          setIsOpeningSession(false)
+          return
+        }
+      } else {
+        setError('A session for today is already active.')
+      }
+
+      await loadData()
+      setIsOpeningSession(false)
+      return
+    }
+
+    const { error: insertError } = await supabase.from('club_sessions').insert({ session_date: today, status: 'open', created_by: user.id, updated_by: user.id })
     if (insertError) {
       if (insertError.code === '23505') {
-        setError('A session already exists for today. Reuse that session instead of opening a new one.')
+        setError('A session already exists for today. Reloading current session state.')
       } else {
         setError(insertError.message)
       }
@@ -369,6 +406,7 @@ export function AdminSessionPage() {
       setIsOpeningSession(false)
       return
     }
+
     await loadData()
     setIsOpeningSession(false)
   }
