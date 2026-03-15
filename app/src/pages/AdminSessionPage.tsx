@@ -291,8 +291,8 @@ export function AdminSessionPage() {
   const lockOwnedByCurrentUser = Boolean(user && activeRound?.edit_lock_user_id === user.id && lockExpiresAt && lockExpiresAt > Date.now())
   const lockBlockedByAnotherAdmin = Boolean(activeRound?.edit_lock_user_id && activeRound.edit_lock_user_id !== user?.id && lockExpiresAt && lockExpiresAt > Date.now())
 
-  const refreshLock = useCallback(async () => {
-    if (!user || !activeRound) return false
+  const refreshLock = useCallback(async (): Promise<Round | null> => {
+    if (!user || !activeRound) return null
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString()
     const lockResult = await supabase
       .from('rounds')
@@ -304,18 +304,18 @@ export function AdminSessionPage() {
 
     if (lockResult.error) {
       setLockError(lockResult.error.message)
-      return false
+      return null
     }
 
     if (!lockResult.data) {
       setLockError('Another admin is currently editing this draft. Please wait for the lock to expire.')
       await loadData()
-      return false
+      return null
     }
 
     setLockError(null)
     setActiveRound(lockResult.data)
-    return true
+    return lockResult.data
   }, [activeRound, loadData, user])
 
   const releaseLock = useCallback(async () => {
@@ -531,8 +531,8 @@ export function AdminSessionPage() {
     setStaleWriteError(null)
 
     try {
-      const hasLock = await refreshLock()
-      if (!hasLock) {
+      const lockedRound = await refreshLock()
+      if (!lockedRound) {
         setIsSavingDraft(false)
         return
       }
@@ -543,7 +543,7 @@ export function AdminSessionPage() {
           .from('rounds')
           .update({ updated_by: user.id })
           .eq('id', roundId)
-          .eq('updated_at', activeRound.updated_at)
+          .eq('updated_at', lockedRound.updated_at)
           .select('id,round_number,status,updated_at,edit_lock_user_id,edit_lock_expires_at')
           .maybeSingle()
         if (touchError) throw new Error(touchError.message)
@@ -618,8 +618,8 @@ export function AdminSessionPage() {
     setError(null)
     setStaleWriteError(null)
 
-    const hasLock = await refreshLock()
-    if (!hasLock) {
+    const lockedRound = await refreshLock()
+    if (!lockedRound) {
       setIsPublishingRound(false)
       return
     }
@@ -644,7 +644,7 @@ export function AdminSessionPage() {
     }
 
     const [{ data: roundRows, error: roundError }, { error: proposedPairingsError }, { error: sessionError }] = await Promise.all([
-      supabase.from('rounds').update({ status: 'published', updated_by: user.id }).eq('id', activeRound.id).eq('updated_at', activeRound.updated_at).select('id'),
+      supabase.from('rounds').update({ status: 'published', updated_by: user.id }).eq('id', activeRound.id).eq('updated_at', lockedRound.updated_at).select('id'),
       supabase.from('pairings').update({ state: 'published', updated_by: user.id }).eq('round_id', activeRound.id).eq('state', 'proposed'),
       session ? supabase.from('club_sessions').update({ status: 'in_round', updated_by: user.id }).eq('id', session.id) : Promise.resolve({ error: null }),
     ])
