@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 type Player = {
   id: string
   full_name: string
+  ladder_rank: number
 }
 
 type Profile = {
@@ -27,15 +28,18 @@ export function AdminPlayerAccountsPage() {
   const [accounts, setAccounts] = useState<PlayerAccount[]>([])
   const [selectedPlayer, setSelectedPlayer] = useState('')
   const [selectedUser, setSelectedUser] = useState('')
+  const [newPlayerName, setNewPlayerName] = useState('')
+  const [newPlayerNotes, setNewPlayerNotes] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [isCreatingPlayer, setIsCreatingPlayer] = useState(false)
 
   const loadData = useCallback(async () => {
     setError(null)
 
     const [playersResult, profilesResult, accountsResult] = await Promise.all([
-      supabase.from('players').select('id,full_name').order('full_name'),
+      supabase.from('players').select('id,full_name,ladder_rank').order('full_name'),
       supabase.from('profiles').select('user_id,display_name,role').order('display_name'),
       supabase
         .from('player_accounts')
@@ -61,32 +65,12 @@ export function AdminPlayerAccountsPage() {
     let active = true
 
     const initialize = async () => {
-      const [playersResult, profilesResult, accountsResult] = await Promise.all([
-        supabase.from('players').select('id,full_name').order('full_name'),
-        supabase.from('profiles').select('user_id,display_name,role').order('display_name'),
-        supabase
-          .from('player_accounts')
-          .select('player_id,user_id,players(full_name)'),
-      ])
+      await loadData()
 
       if (!active) {
         return
       }
 
-      if (playersResult.error || profilesResult.error || accountsResult.error) {
-        setError(
-          playersResult.error?.message ??
-            profilesResult.error?.message ??
-            accountsResult.error?.message ??
-            'Failed to load player account mappings.',
-        )
-        setIsLoading(false)
-        return
-      }
-
-      setPlayers(playersResult.data)
-      setProfiles(profilesResult.data)
-      setAccounts(accountsResult.data as unknown as PlayerAccount[])
       setIsLoading(false)
     }
 
@@ -95,7 +79,38 @@ export function AdminPlayerAccountsPage() {
     return () => {
       active = false
     }
-  }, [])
+  }, [loadData])
+
+  const handleCreatePlayer = async (event: FormEvent) => {
+    event.preventDefault()
+    const trimmedName = newPlayerName.trim()
+    if (!trimmedName) {
+      return
+    }
+
+    const nextRank = Math.max(0, ...players.map((player) => player.ladder_rank)) + 1
+
+    setIsCreatingPlayer(true)
+    setError(null)
+
+    const { error: createError } = await supabase.from('players').insert({
+      full_name: trimmedName,
+      ladder_rank: nextRank,
+      active: true,
+      notes: newPlayerNotes.trim() || null,
+    })
+
+    if (createError) {
+      setError(createError.message)
+      setIsCreatingPlayer(false)
+      return
+    }
+
+    setNewPlayerName('')
+    setNewPlayerNotes('')
+    await loadData()
+    setIsCreatingPlayer(false)
+  }
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -142,6 +157,30 @@ export function AdminPlayerAccountsPage() {
     <Card>
       <h2>User → Player Mapping</h2>
       <PageState isLoading={isLoading} error={error}>
+        <form className="auth-form" onSubmit={handleCreatePlayer}>
+          <label>
+            New player name
+            <input
+              required
+              value={newPlayerName}
+              onChange={(event) => setNewPlayerName(event.target.value)}
+            />
+          </label>
+
+          <label>
+            Notes (optional)
+            <textarea
+              rows={3}
+              value={newPlayerNotes}
+              onChange={(event) => setNewPlayerNotes(event.target.value)}
+            />
+          </label>
+
+          <Button disabled={isCreatingPlayer} type="submit">
+            {isCreatingPlayer ? 'Creating player...' : 'Create player'}
+          </Button>
+        </form>
+
         <form className="auth-form" onSubmit={handleSubmit}>
           <label>
             Player
