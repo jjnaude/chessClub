@@ -220,3 +220,90 @@ a {
   width: 1rem;
   height: 1rem;
 }
+
+.pairing-editor {
+  display: grid;
+  gap: 0.75rem;
+  border-top: 1px solid #334155;
+  padding-top: 0.75rem;
+}
+
+.pairing-grid {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.pairing-grid-row {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  background: #1f2937;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.65rem;
+}
+
+.pairing-grid-header {
+  background: #0b1220;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pairing-grid input,
+.pairing-grid select,
+.constraints-form select {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 0.45rem;
+  padding: 0.45rem 0.5rem;
+  color: #e2e8f0;
+}
+
+.pairing-note-list,
+.pairing-error-list,
+.constraint-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.pairing-note-list {
+  color: #fcd34d;
+}
+
+.pairing-error-list {
+  color: #fca5a5;
+}
+
+.constraints-panel {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.constraints-form {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.constraint-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+  background: #1f2937;
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.6rem;
+}
+
+@media (max-width: 767px) {
+  .pairing-grid-row {
+    grid-template-columns: 1fr;
+  }
+
+  .constraints-form {
+    grid-template-columns: 1fr;
+  }
+}
