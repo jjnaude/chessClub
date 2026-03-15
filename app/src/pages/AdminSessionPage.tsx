@@ -736,9 +736,16 @@ export function AdminSessionPage() {
     }
 
     const snapshotEntriesPayload = ranking.map((player, index) => ({ snapshot_id: snapshotId as string, player_id: player.id, rank_position: index + 1, updated_by: user.id }))
-    const { error: entriesError } = await supabase.from('ladder_snapshot_entries').upsert(snapshotEntriesPayload, { onConflict: 'snapshot_id,player_id' })
-    if (entriesError) {
-      setError(entriesError.message)
+    const { error: clearEntriesError } = await supabase.from('ladder_snapshot_entries').delete().eq('snapshot_id', snapshotId)
+    if (clearEntriesError) {
+      setError(clearEntriesError.message)
+      setIsFinalizingRound(false)
+      return
+    }
+
+    const { error: entriesInsertError } = await supabase.from('ladder_snapshot_entries').insert(snapshotEntriesPayload)
+    if (entriesInsertError) {
+      setError(entriesInsertError.message)
       setIsFinalizingRound(false)
       return
     }
