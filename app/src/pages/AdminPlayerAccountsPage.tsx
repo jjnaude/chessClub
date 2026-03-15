@@ -167,41 +167,30 @@ export function AdminPlayerAccountsPage() {
       return
     }
 
-    const updates = playersByRank
-      .map((player) => {
-        if (player.id === selected.id) {
-          return { id: player.id, ladder_rank: boundedTargetRank }
-        }
-
-        if (boundedTargetRank < selected.ladder_rank) {
-          if (player.ladder_rank >= boundedTargetRank && player.ladder_rank < selected.ladder_rank) {
-            return { id: player.id, ladder_rank: player.ladder_rank + 1 }
-          }
-          return null
-        }
-
-        if (player.ladder_rank <= boundedTargetRank && player.ladder_rank > selected.ladder_rank) {
-          return { id: player.id, ladder_rank: player.ladder_rank - 1 }
-        }
-
-        return null
-      })
-      .filter((value): value is { id: string; ladder_rank: number } => value !== null)
-
     setIsUpdatingRank(true)
     setError(null)
 
-    for (const update of updates) {
-      const { error: updateError } = await supabase
-        .from('players')
-        .update({ ladder_rank: update.ladder_rank })
-        .eq('id', update.id)
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser()
 
-      if (updateError) {
-        setError(updateError.message)
-        setIsUpdatingRank(false)
-        return
-      }
+    if (authError || !user) {
+      setError(authError?.message ?? 'Failed to identify the signed-in admin.')
+      setIsUpdatingRank(false)
+      return
+    }
+
+    const { error: updateError } = await supabase.rpc('admin_move_player_rank', {
+      target_player_id: selected.id,
+      target_rank: boundedTargetRank,
+      actor_id: user.id,
+    })
+
+    if (updateError) {
+      setError(updateError.message)
+      setIsUpdatingRank(false)
+      return
     }
 
     setTargetRank('')
