@@ -307,3 +307,11 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+
+.round-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
