@@ -287,6 +287,25 @@ export function AdminSessionPage() {
     }
   }, [loadData])
 
+  useEffect(() => {
+    if (!session?.id) return
+
+    const channel = supabase
+      .channel(`attendance-${session.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attendance', filter: `session_id=eq.${session.id}` },
+        () => {
+          void loadData()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [loadData, session?.id])
+
   const lockExpiresAt = activeRound?.edit_lock_expires_at ? new Date(activeRound.edit_lock_expires_at).getTime() : null
   const lockOwnedByCurrentUser = Boolean(user && activeRound?.edit_lock_user_id === user.id && lockExpiresAt && lockExpiresAt > Date.now())
   const lockBlockedByAnotherAdmin = Boolean(activeRound?.edit_lock_user_id && activeRound.edit_lock_user_id !== user?.id && lockExpiresAt && lockExpiresAt > Date.now())

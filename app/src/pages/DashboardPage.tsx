@@ -23,18 +23,13 @@ type PlayerIdentity = {
 
 type AttendanceRow = {
   player_id: string
-  is_present: boolean
   is_available: boolean
 }
 
-type AvailabilityState = {
-  session: Session | null
-  players: Array<{
-    id: string
-    label: string
-    isPresent: boolean
-    isAvailable: boolean
-  }>
+type PlayerAvailabilityRow = {
+  id: string
+  label: string
+  isAvailable: boolean
 }
 
 function getSessionStatusLabel(status: Session['status']) {
@@ -48,7 +43,7 @@ export function DashboardPage() {
   const { user } = useAuth()
   const [availabilityByPlayerId, setAvailabilityByPlayerId] = useState<Record<string, boolean>>({})
   const [activeSession, setActiveSession] = useState<Session | null>(null)
-  const [playerRows, setPlayerRows] = useState<AvailabilityState['players']>([])
+  const [playerRows, setPlayerRows] = useState<PlayerAvailabilityRow[]>([])
   const [isSavingPlayerId, setIsSavingPlayerId] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -86,20 +81,14 @@ export function DashboardPage() {
 
       if (!sessionResult.data || players.length === 0) {
         setActiveSession(sessionResult.data)
-        setPlayerRows(
-          players.map((player) => ({
-            ...player,
-            isPresent: false,
-            isAvailable: false,
-          })),
-        )
+        setPlayerRows(players.map((player) => ({ ...player, isAvailable: false })))
         setAvailabilityByPlayerId({})
         return
       }
 
       const attendanceResult = await supabase
         .from('attendance')
-        .select('player_id,is_present,is_available')
+        .select('player_id,is_available')
         .eq('session_id', sessionResult.data.id)
         .in(
           'player_id',
@@ -118,7 +107,6 @@ export function DashboardPage() {
         const attendance = attendanceByPlayerIdMap.get(player.id)
         return {
           ...player,
-          isPresent: attendance?.is_present ?? false,
           isAvailable: attendance?.is_available ?? false,
         }
       })
@@ -166,7 +154,6 @@ export function DashboardPage() {
         player.id === playerId
           ? {
               ...player,
-              isPresent: true,
               isAvailable: nextAvailability,
             }
           : player,
