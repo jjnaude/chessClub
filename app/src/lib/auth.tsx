@@ -26,6 +26,7 @@ type AuthContextValue = {
   isLoading: boolean
   error: string | null
   signIn: (email: string, password: string) => Promise<void>
+  signUp: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }
@@ -156,6 +157,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [])
 
+  const signUp = useCallback(async (email: string, password: string) => {
+    setError(null)
+    const { error: signUpError } = await supabase.auth.signUp({ email, password })
+    if (signUpError) {
+      throw new Error(signUpError.message)
+    }
+  }, [])
+
   const signOut = useCallback(async () => {
     setError(null)
     const { error: signOutError } = await supabase.auth.signOut()
@@ -176,10 +185,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       isLoading,
       error,
       signIn,
+      signUp,
       signOut,
       refreshProfile,
     }),
-    [error, isLoading, profile, refreshProfile, session, signIn, signOut],
+    [error, isLoading, profile, refreshProfile, session, signIn, signOut, signUp],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
