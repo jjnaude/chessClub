@@ -126,6 +126,21 @@ a {
   color: #fca5a5;
 }
 
+.availability-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.availability-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  background: #1f2937;
+  border-radius: 0.5rem;
+  padding: 0.55rem 0.65rem;
+}
+
 @media (min-width: 768px) {
   .mobile-nav {
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -299,6 +314,10 @@ a {
 }
 
 @media (max-width: 767px) {
+  .availability-row {
+    grid-template-columns: 1fr;
+  }
+
   .pairing-grid-row {
     grid-template-columns: 1fr;
   }
