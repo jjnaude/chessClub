@@ -12,6 +12,7 @@ import {
   type PairingHistoryEntry,
   type PairingProposal,
 } from '../domain/pairing/generatePairings'
+import { formatRoundPairingsForWhatsApp } from '../domain/pairing/shareFormatter'
 
 type Session = {
   id: string
@@ -47,6 +48,7 @@ type PairingRow = {
   board_number: number
   white_player_id: string
   black_player_id: string
+  state: 'proposed' | 'approved' | 'published' | 'finished'
 }
 
 type ConstraintRow = {
@@ -60,6 +62,18 @@ const defaultConstraintForm = {
   constraintType: 'forbid_pair' as PairingConstraint['constraintType'],
   playerAId: '',
   playerBId: '',
+}
+
+function getRoundStatusBadgeStatus(status: Round['status']) {
+  if (status === 'draft') {
+    return 'warning' as const
+  }
+
+  if (status === 'published') {
+    return 'success' as const
+  }
+
+  return 'neutral' as const
 }
 
 function validateProposal(proposal: PairingProposal[]) {
@@ -99,7 +113,7 @@ export function AdminSessionPage() {
   const [players, setPlayers] = useState<Player[]>([])
   const [attendanceByPlayerId, setAttendanceByPlayerId] = useState<Record<string, AttendanceState>>({})
   const [pairingHistory, setPairingHistory] = useState<PairingHistoryEntry[]>([])
-  const [draftRound, setDraftRound] = useState<Round | null>(null)
+  const [activeRound, setActiveRound] = useState<Round | null>(null)
   const [proposalPairings, setProposalPairings] = useState<PairingProposal[]>([])
   const [pairingConstraints, setPairingConstraints] = useState<PairingConstraint[]>([])
   const [constraintForm, setConstraintForm] = useState(defaultConstraintForm)
@@ -153,7 +167,7 @@ export function AdminSessionPage() {
 
     if (!sessionResult.data) {
       setAttendanceByPlayerId({})
-      setDraftRound(null)
+      setActiveRound(null)
       setProposalPairings([])
       setPairingConstraints([])
       return
@@ -180,23 +194,22 @@ export function AdminSessionPage() {
 
     setAttendanceByPlayerId(nextAttendance)
 
-    const draftRoundResult = await supabase
+    const activeRoundResult = await supabase
       .from('rounds')
       .select('id,round_number,status')
       .eq('session_id', sessionResult.data.id)
-      .eq('status', 'draft')
       .order('round_number', { ascending: false })
       .limit(1)
       .maybeSingle()
 
-    if (draftRoundResult.error) {
-      setError(draftRoundResult.error.message)
+    if (activeRoundResult.error) {
+      setError(activeRoundResult.error.message)
       return
     }
 
-    setDraftRound(draftRoundResult.data)
+    setActiveRound(activeRoundResult.data)
 
-    if (!draftRoundResult.data) {
+    if (!activeRoundResult.data) {
       setProposalPairings([])
       setPairingConstraints([])
       return
@@ -205,14 +218,13 @@ export function AdminSessionPage() {
     const [pairingsResult, constraintsResult] = await Promise.all([
       supabase
         .from('pairings')
-        .select('board_number,white_player_id,black_player_id')
-        .eq('round_id', draftRoundResult.data.id)
-        .eq('state', 'proposed')
+        .select('board_number,white_player_id,black_player_id,state')
+        .eq('round_id', activeRoundResult.data.id)
         .order('board_number'),
       supabase
         .from('pairing_constraints')
         .select('id,constraint_type,player_a_id,player_b_id')
-        .eq('round_id', draftRoundResult.data.id)
+        .eq('round_id', activeRoundResult.data.id)
         .order('created_at'),
     ])
 
@@ -281,6 +293,23 @@ export function AdminSessionPage() {
     () => new Map(players.map((player) => [player.id, `#${player.ladder_rank} ${player.full_name}`])),
     [players],
   )
+
+  const shareText = useMemo(() => {
+    if (!activeRound || proposalPairings.length === 0) {
+      return ''
+    }
+
+    return formatRoundPairingsForWhatsApp(
+      activeRound.round_number,
+      proposalPairings
+        .filter((pairing) => pairing.whitePlayerId && pairing.blackPlayerId)
+        .map((pairing) => ({
+          boardNumber: pairing.boardNumber,
+          whitePlayerName: playerNameById.get(pairing.whitePlayerId) ?? pairing.whitePlayerId,
+          blackPlayerName: playerNameById.get(pairing.blackPlayerId) ?? pairing.blackPlayerId,
+        })),
+    )
+  }, [activeRound, playerNameById, proposalPairings])
 
   const handleOpenSession = async () => {
     if (!user) {
@@ -403,8 +432,8 @@ export function AdminSessionPage() {
       throw new Error('Open a session and sign in before saving pairings.')
     }
 
-    if (draftRound) {
-      return draftRound.id
+    if (activeRound?.status === 'draft') {
+      return activeRound.id
     }
 
     const latestRoundResult = await supabase
@@ -434,7 +463,7 @@ export function AdminSessionPage() {
       throw new Error(draftRoundResult.error.message)
     }
 
-    setDraftRound(draftRoundResult.data)
+    setActiveRound(draftRoundResult.data)
     return draftRoundResult.data.id
   }
 
@@ -525,7 +554,7 @@ export function AdminSessionPage() {
   }
 
   const handlePublishRound = async () => {
-    if (!draftRound) {
+    if (!activeRound || activeRound.status !== 'draft') {
       setError('Save a draft round before publishing.')
       return
     }
@@ -542,8 +571,8 @@ export function AdminSessionPage() {
     setError(null)
 
     const [{ error: roundError }, { error: pairingsError }, { error: sessionError }] = await Promise.all([
-      supabase.from('rounds').update({ status: 'published' }).eq('id', draftRound.id),
-      supabase.from('pairings').update({ state: 'published' }).eq('round_id', draftRound.id),
+      supabase.from('rounds').update({ status: 'published' }).eq('id', activeRound.id),
+      supabase.from('pairings').update({ state: 'published' }).eq('round_id', activeRound.id).eq('state', 'proposed'),
       session
         ? supabase.from('club_sessions').update({ status: 'in_round' }).eq('id', session.id)
         : Promise.resolve({ error: null }),
@@ -580,6 +609,14 @@ export function AdminSessionPage() {
       },
     ])
     setConstraintForm(defaultConstraintForm)
+  }
+
+  const handleCopyShareText = async () => {
+    if (!shareText) {
+      return
+    }
+
+    await navigator.clipboard.writeText(shareText)
   }
 
   return (
@@ -657,7 +694,12 @@ export function AdminSessionPage() {
 
             <section className="pairing-editor">
               <h3>Round pairing proposal</h3>
-              {draftRound && <p className="page-message">Editing draft round #{draftRound.round_number}</p>}
+              {activeRound && (
+                <div className="round-status-row">
+                  <p className="page-message">Round #{activeRound.round_number}</p>
+                  <StatusBadge status={getRoundStatusBadgeStatus(activeRound.status)}>{activeRound.status}</StatusBadge>
+                </div>
+              )}
               <div className="button-row">
                 <Button
                   variant="secondary"
@@ -666,16 +708,32 @@ export function AdminSessionPage() {
                 >
                   Generate proposal
                 </Button>
-                <Button disabled={isSavingDraft || proposalPairings.length === 0} onClick={() => void handleSaveDraft()}>
+                <Button
+                  disabled={isSavingDraft || proposalPairings.length === 0 || activeRound?.status === 'published'}
+                  onClick={() => void handleSaveDraft()}
+                >
                   {isSavingDraft ? 'Saving draft...' : 'Save draft round'}
                 </Button>
                 <Button
                   variant="secondary"
-                  disabled={isPublishingRound || !draftRound || proposalPairings.length === 0}
+                  disabled={isPublishingRound || activeRound?.status !== 'draft' || proposalPairings.length === 0}
                   onClick={() => void handlePublishRound()}
                 >
                   {isPublishingRound ? 'Publishing...' : 'Publish round'}
                 </Button>
+                <Button variant="secondary" disabled={!shareText} onClick={() => void handleCopyShareText()}>
+                  Copy WhatsApp share text
+                </Button>
+                {shareText && (
+                  <a
+                    className="btn btn-secondary"
+                    href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Open in WhatsApp
+                  </a>
+                )}
               </div>
 
               {pairingWarnings.length > 0 && (
