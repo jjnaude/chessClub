@@ -193,6 +193,7 @@ export function CurrentRoundPage() {
       pairing_id: pairing.id,
       result_code: resultCode,
       submitted_by: user.id,
+      updated_by: user.id,
     })
 
     if (insertError) {
