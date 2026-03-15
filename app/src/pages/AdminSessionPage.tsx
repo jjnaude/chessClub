@@ -27,7 +27,6 @@ type Player = {
 }
 
 type AttendanceRow = {
-  session_id: string
   player_id: string
   is_present: boolean
   is_available: boolean
@@ -45,6 +44,7 @@ type Round = {
 }
 
 type PairingRow = {
+  id: string
   board_number: number
   white_player_id: string
   black_player_id: string
@@ -58,6 +58,16 @@ type ConstraintRow = {
   player_b_id: string
 }
 
+type ResultCode = '1-0' | '0-1' | '1/2-1/2' | 'void'
+type ResultRow = { pairing_id: string; result_code: ResultCode }
+
+const resultOptions: Array<{ value: ResultCode; label: string }> = [
+  { value: '1-0', label: '1-0 (White wins)' },
+  { value: '0-1', label: '0-1 (Black wins)' },
+  { value: '1/2-1/2', label: '1/2-1/2 (Draw)' },
+  { value: 'void', label: 'void' },
+]
+
 const defaultConstraintForm = {
   constraintType: 'forbid_pair' as PairingConstraint['constraintType'],
   playerAId: '',
@@ -65,22 +75,16 @@ const defaultConstraintForm = {
 }
 
 function getRoundStatusBadgeStatus(status: Round['status']) {
-  if (status === 'draft') {
-    return 'warning' as const
-  }
-
-  if (status === 'published') {
-    return 'success' as const
-  }
-
+  if (status === 'draft') return 'warning' as const
+  if (status === 'published') return 'success' as const
   return 'neutral' as const
 }
 
 function validateProposal(proposal: PairingProposal[]) {
   const errors: string[] = []
   const seenPlayerIds = new Set<string>()
-
   const boards = [...proposal.map((entry) => entry.boardNumber)].sort((a, b) => a - b)
+
   for (let index = 0; index < boards.length; index += 1) {
     if (boards[index] !== index + 1) {
       errors.push('Board numbers must be contiguous starting at 1.')
@@ -93,11 +97,8 @@ function validateProposal(proposal: PairingProposal[]) {
       errors.push(`Board ${entry.boardNumber} has a self-pairing.`)
     }
 
-    if (seenPlayerIds.has(entry.whitePlayerId)) {
-      errors.push(`Player assigned as white on board ${entry.boardNumber} appears multiple times.`)
-    }
-    if (seenPlayerIds.has(entry.blackPlayerId)) {
-      errors.push(`Player assigned as black on board ${entry.boardNumber} appears multiple times.`)
+    if (seenPlayerIds.has(entry.whitePlayerId) || seenPlayerIds.has(entry.blackPlayerId)) {
+      errors.push(`Board ${entry.boardNumber} has a duplicate player assignment.`)
     }
 
     seenPlayerIds.add(entry.whitePlayerId)
@@ -114,17 +115,23 @@ export function AdminSessionPage() {
   const [attendanceByPlayerId, setAttendanceByPlayerId] = useState<Record<string, AttendanceState>>({})
   const [pairingHistory, setPairingHistory] = useState<PairingHistoryEntry[]>([])
   const [activeRound, setActiveRound] = useState<Round | null>(null)
+  const [publishedPairings, setPublishedPairings] = useState<PairingRow[]>([])
+  const [resultByPairingId, setResultByPairingId] = useState<Record<string, ResultCode>>({})
+
   const [proposalPairings, setProposalPairings] = useState<PairingProposal[]>([])
   const [pairingConstraints, setPairingConstraints] = useState<PairingConstraint[]>([])
   const [constraintForm, setConstraintForm] = useState(defaultConstraintForm)
   const [pairingWarnings, setPairingWarnings] = useState<string[]>([])
   const [pairingValidationErrors, setPairingValidationErrors] = useState<string[]>([])
+
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isOpeningSession, setIsOpeningSession] = useState(false)
   const [isSavingAttendance, setIsSavingAttendance] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [isPublishingRound, setIsPublishingRound] = useState(false)
+  const [isSavingOverride, setIsSavingOverride] = useState(false)
+  const [isFinalizingRound, setIsFinalizingRound] = useState(false)
 
   const loadData = useCallback(async () => {
     setError(null)
@@ -142,27 +149,18 @@ export function AdminSessionPage() {
         .from('pairing_history')
         .select('white_player_id,black_player_id,played_at')
         .order('played_at', { ascending: false })
-        .limit(200),
+        .limit(400),
     ])
 
     if (playersResult.error || sessionResult.error || historyResult.error) {
-      setError(
-        playersResult.error?.message ??
-          sessionResult.error?.message ??
-          historyResult.error?.message ??
-          'Failed to load session data.',
-      )
+      setError(playersResult.error?.message ?? sessionResult.error?.message ?? historyResult.error?.message ?? 'Failed to load')
       return
     }
 
     setPlayers(playersResult.data)
     setSession(sessionResult.data)
     setPairingHistory(
-      historyResult.data.map((row) => ({
-        whitePlayerId: row.white_player_id,
-        blackPlayerId: row.black_player_id,
-        playedAt: row.played_at,
-      })),
+      historyResult.data.map((row) => ({ whitePlayerId: row.white_player_id, blackPlayerId: row.black_player_id, playedAt: row.played_at })),
     )
 
     if (!sessionResult.data) {
@@ -170,12 +168,14 @@ export function AdminSessionPage() {
       setActiveRound(null)
       setProposalPairings([])
       setPairingConstraints([])
+      setPublishedPairings([])
+      setResultByPairingId({})
       return
     }
 
     const attendanceResult = await supabase
       .from('attendance')
-      .select('session_id,player_id,is_present,is_available')
+      .select('player_id,is_present,is_available')
       .eq('session_id', sessionResult.data.id)
 
     if (attendanceResult.error) {
@@ -187,11 +187,9 @@ export function AdminSessionPage() {
     for (const player of playersResult.data) {
       nextAttendance[player.id] = { isPresent: false, isAvailable: false }
     }
-
     for (const row of attendanceResult.data as AttendanceRow[]) {
       nextAttendance[row.player_id] = { isPresent: row.is_present, isAvailable: row.is_available }
     }
-
     setAttendanceByPlayerId(nextAttendance)
 
     const activeRoundResult = await supabase
@@ -208,129 +206,88 @@ export function AdminSessionPage() {
     }
 
     setActiveRound(activeRoundResult.data)
-
     if (!activeRoundResult.data) {
       setProposalPairings([])
       setPairingConstraints([])
+      setPublishedPairings([])
+      setResultByPairingId({})
       return
     }
 
     const [pairingsResult, constraintsResult] = await Promise.all([
-      supabase
-        .from('pairings')
-        .select('board_number,white_player_id,black_player_id,state')
-        .eq('round_id', activeRoundResult.data.id)
-        .order('board_number'),
-      supabase
-        .from('pairing_constraints')
-        .select('id,constraint_type,player_a_id,player_b_id')
-        .eq('round_id', activeRoundResult.data.id)
-        .order('created_at'),
+      supabase.from('pairings').select('id,board_number,white_player_id,black_player_id,state').eq('round_id', activeRoundResult.data.id).order('board_number'),
+      supabase.from('pairing_constraints').select('id,constraint_type,player_a_id,player_b_id').eq('round_id', activeRoundResult.data.id).order('created_at'),
     ])
 
     if (pairingsResult.error || constraintsResult.error) {
-      setError(pairingsResult.error?.message ?? constraintsResult.error?.message ?? 'Failed to load round draft.')
+      setError(pairingsResult.error?.message ?? constraintsResult.error?.message ?? 'Failed to load round')
       return
     }
 
-    setProposalPairings(
-      (pairingsResult.data as PairingRow[]).map((row) => ({
-        boardNumber: row.board_number,
-        whitePlayerId: row.white_player_id,
-        blackPlayerId: row.black_player_id,
-      })),
-    )
+    const allPairings = pairingsResult.data as PairingRow[]
+    setProposalPairings(allPairings.map((row) => ({ boardNumber: row.board_number, whitePlayerId: row.white_player_id, blackPlayerId: row.black_player_id })))
+    setPublishedPairings(allPairings.filter((row) => row.state === 'published' || row.state === 'finished'))
 
     setPairingConstraints(
-      (constraintsResult.data as ConstraintRow[]).map((row) => ({
-        id: row.id,
-        constraintType: row.constraint_type,
-        playerAId: row.player_a_id,
-        playerBId: row.player_b_id,
-      })),
+      (constraintsResult.data as ConstraintRow[]).map((row) => ({ id: row.id, constraintType: row.constraint_type, playerAId: row.player_a_id, playerBId: row.player_b_id })),
     )
+
+    const pairingIds = allPairings.map((row) => row.id)
+    if (pairingIds.length === 0) {
+      setResultByPairingId({})
+      return
+    }
+
+    const resultsResult = await supabase.from('results').select('pairing_id,result_code').in('pairing_id', pairingIds)
+    if (resultsResult.error) {
+      setError(resultsResult.error.message)
+      return
+    }
+
+    const nextResults: Record<string, ResultCode> = {}
+    for (const row of resultsResult.data as ResultRow[]) {
+      nextResults[row.pairing_id] = row.result_code
+    }
+    setResultByPairingId(nextResults)
   }, [])
 
   useEffect(() => {
     let active = true
-
     const initialize = async () => {
       setIsLoading(true)
       await loadData()
-      if (active) {
-        setIsLoading(false)
-      }
+      if (active) setIsLoading(false)
     }
-
     void initialize()
-
     return () => {
       active = false
     }
   }, [loadData])
 
-  const availablePlayerIds = useMemo(
-    () =>
-      players
-        .filter((player) => attendanceByPlayerId[player.id]?.isAvailable)
-        .map((player) => player.id),
-    [attendanceByPlayerId, players],
-  )
-
+  const availablePlayerIds = useMemo(() => players.filter((p) => attendanceByPlayerId[p.id]?.isAvailable).map((p) => p.id), [attendanceByPlayerId, players])
   const availableCount = availablePlayerIds.length
-
-  const presentCount = useMemo(
-    () => Object.values(attendanceByPlayerId).filter((row) => row.isPresent).length,
-    [attendanceByPlayerId],
-  )
-
-  const unavailableCount = useMemo(
-    () => Object.values(attendanceByPlayerId).filter((row) => row.isPresent && !row.isAvailable).length,
-    [attendanceByPlayerId],
-  )
-
-  const playerNameById = useMemo(
-    () => new Map(players.map((player) => [player.id, `#${player.ladder_rank} ${player.full_name}`])),
-    [players],
-  )
-
+  const presentCount = useMemo(() => Object.values(attendanceByPlayerId).filter((row) => row.isPresent).length, [attendanceByPlayerId])
+  const unavailableCount = useMemo(() => Object.values(attendanceByPlayerId).filter((row) => row.isPresent && !row.isAvailable).length, [attendanceByPlayerId])
+  const playerNameById = useMemo(() => new Map(players.map((p) => [p.id, `#${p.ladder_rank} ${p.full_name}`])), [players])
   const shareText = useMemo(() => {
-    if (!activeRound || proposalPairings.length === 0) {
-      return ''
-    }
-
+    if (!activeRound || proposalPairings.length === 0) return ''
     return formatRoundPairingsForWhatsApp(
       activeRound.round_number,
-      proposalPairings
-        .filter((pairing) => pairing.whitePlayerId && pairing.blackPlayerId)
-        .map((pairing) => ({
-          boardNumber: pairing.boardNumber,
-          whitePlayerName: playerNameById.get(pairing.whitePlayerId) ?? pairing.whitePlayerId,
-          blackPlayerName: playerNameById.get(pairing.blackPlayerId) ?? pairing.blackPlayerId,
-        })),
+      proposalPairings.filter((p) => p.whitePlayerId && p.blackPlayerId).map((p) => ({ boardNumber: p.boardNumber, whitePlayerName: playerNameById.get(p.whitePlayerId) ?? p.whitePlayerId, blackPlayerName: playerNameById.get(p.blackPlayerId) ?? p.blackPlayerId })),
     )
   }, [activeRound, playerNameById, proposalPairings])
 
   const handleOpenSession = async () => {
-    if (!user) {
-      setError('You must be signed in to open a session.')
-      return
-    }
-
+    if (!user) return
     setIsOpeningSession(true)
     setError(null)
-
     const today = new Date().toISOString().slice(0, 10)
-    const { error: insertError } = await supabase
-      .from('club_sessions')
-      .insert({ session_date: today, status: 'open', created_by: user.id })
-
+    const { error: insertError } = await supabase.from('club_sessions').insert({ session_date: today, status: 'open', created_by: user.id })
     if (insertError) {
       setError(insertError.message)
       setIsOpeningSession(false)
       return
     }
-
     await loadData()
     setIsOpeningSession(false)
   }
@@ -338,144 +295,64 @@ export function AdminSessionPage() {
   const handleAttendanceToggle = (playerId: string, field: 'isPresent' | 'isAvailable', nextValue: boolean) => {
     setAttendanceByPlayerId((current) => {
       const existing = current[playerId] ?? { isPresent: false, isAvailable: false }
-
-      if (field === 'isPresent' && !nextValue) {
-        return {
-          ...current,
-          [playerId]: { isPresent: false, isAvailable: false },
-        }
-      }
-
-      if (field === 'isAvailable' && nextValue) {
-        return {
-          ...current,
-          [playerId]: { isPresent: true, isAvailable: true },
-        }
-      }
-
-      return {
-        ...current,
-        [playerId]: { ...existing, [field]: nextValue },
-      }
+      if (field === 'isPresent' && !nextValue) return { ...current, [playerId]: { isPresent: false, isAvailable: false } }
+      if (field === 'isAvailable' && nextValue) return { ...current, [playerId]: { isPresent: true, isAvailable: true } }
+      return { ...current, [playerId]: { ...existing, [field]: nextValue } }
     })
   }
 
   const handleSaveAttendance = async () => {
-    if (!session || !user) {
-      setError('Open a session before saving attendance.')
-      return
-    }
-
+    if (!session || !user) return
     setIsSavingAttendance(true)
     setError(null)
-
     const payload = players.map((player) => {
       const state = attendanceByPlayerId[player.id] ?? { isPresent: false, isAvailable: false }
-      return {
-        session_id: session.id,
-        player_id: player.id,
-        is_present: state.isPresent,
-        is_available: state.isAvailable,
-        checked_in_at: state.isPresent ? new Date().toISOString() : null,
-        updated_by: user.id,
-      }
+      return { session_id: session.id, player_id: player.id, is_present: state.isPresent, is_available: state.isAvailable, checked_in_at: state.isPresent ? new Date().toISOString() : null, updated_by: user.id }
     })
-
     const { error: upsertError } = await supabase.from('attendance').upsert(payload)
-
     if (upsertError) {
       setError(upsertError.message)
       setIsSavingAttendance(false)
       return
     }
-
     await loadData()
     setIsSavingAttendance(false)
   }
 
   const handleGenerateProposal = () => {
     const result: PairingGenerationResult = generatePairings({
-      players: players.map((player) => ({
-        id: player.id,
-        fullName: player.full_name,
-        ladderRank: player.ladder_rank,
-      })),
+      players: players.map((p) => ({ id: p.id, fullName: p.full_name, ladderRank: p.ladder_rank })),
       attendance: availablePlayerIds.map((playerId) => ({ playerId, isAvailable: true })),
       pairingHistory,
       pairingConstraints,
     })
-
     setProposalPairings(result.proposal)
     setPairingWarnings(result.warnings)
     setPairingValidationErrors(validateProposal(result.proposal))
   }
 
-  const handlePairingChange = (
-    index: number,
-    field: 'boardNumber' | 'whitePlayerId' | 'blackPlayerId',
-    value: number | string,
-  ) => {
-    setProposalPairings((current) =>
-      current.map((entry, currentIndex) =>
-        currentIndex === index
-          ? {
-              ...entry,
-              [field]: value,
-            }
-          : entry,
-      ),
-    )
+  const handlePairingChange = (index: number, field: 'boardNumber' | 'whitePlayerId' | 'blackPlayerId', value: number | string) => {
+    setProposalPairings((current) => current.map((entry, currentIndex) => (currentIndex === index ? { ...entry, [field]: value } : entry)))
   }
 
   const ensureDraftRoundId = async () => {
-    if (!session || !user) {
-      throw new Error('Open a session and sign in before saving pairings.')
-    }
+    if (!session || !user) throw new Error('Open a session and sign in before saving pairings.')
+    if (activeRound?.status === 'draft') return activeRound.id
 
-    if (activeRound?.status === 'draft') {
-      return activeRound.id
-    }
-
-    const latestRoundResult = await supabase
-      .from('rounds')
-      .select('round_number')
-      .eq('session_id', session.id)
-      .order('round_number', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (latestRoundResult.error) {
-      throw new Error(latestRoundResult.error.message)
-    }
+    const latestRoundResult = await supabase.from('rounds').select('round_number').eq('session_id', session.id).order('round_number', { ascending: false }).limit(1).maybeSingle()
+    if (latestRoundResult.error) throw new Error(latestRoundResult.error.message)
 
     const roundNumber = (latestRoundResult.data?.round_number ?? 0) + 1
-    const draftRoundResult = await supabase
-      .from('rounds')
-      .insert({
-        session_id: session.id,
-        round_number: roundNumber,
-        status: 'draft',
-      })
-      .select('id,round_number,status')
-      .single()
-
-    if (draftRoundResult.error) {
-      throw new Error(draftRoundResult.error.message)
-    }
-
+    const draftRoundResult = await supabase.from('rounds').insert({ session_id: session.id, round_number: roundNumber, status: 'draft' }).select('id,round_number,status').single()
+    if (draftRoundResult.error) throw new Error(draftRoundResult.error.message)
     setActiveRound(draftRoundResult.data)
     return draftRoundResult.data.id
   }
 
   const handleSaveDraft = async () => {
-    if (!user) {
-      setError('You must be signed in to save a draft round.')
-      return
-    }
-
+    if (!user) return
     const validationErrors = validateProposal(proposalPairings)
     setPairingValidationErrors(validationErrors)
-
     if (validationErrors.length > 0) {
       setError('Fix validation errors before saving.')
       return
@@ -486,63 +363,27 @@ export function AdminSessionPage() {
 
     try {
       const roundId = await ensureDraftRoundId()
-
       const { error: deletePairingsError } = await supabase.from('pairings').delete().eq('round_id', roundId)
-      if (deletePairingsError) {
-        throw new Error(deletePairingsError.message)
-      }
+      if (deletePairingsError) throw new Error(deletePairingsError.message)
 
-      const pairingsPayload = proposalPairings.map((entry) => ({
-        round_id: roundId,
-        board_number: entry.boardNumber,
-        white_player_id: entry.whitePlayerId,
-        black_player_id: entry.blackPlayerId,
-        state: 'proposed' as const,
-        created_by: user.id,
-      }))
-
+      const pairingsPayload = proposalPairings.map((entry) => ({ round_id: roundId, board_number: entry.boardNumber, white_player_id: entry.whitePlayerId, black_player_id: entry.blackPlayerId, state: 'proposed' as const, created_by: user.id }))
       if (pairingsPayload.length > 0) {
         const { error: insertPairingsError } = await supabase.from('pairings').insert(pairingsPayload)
-        if (insertPairingsError) {
-          throw new Error(insertPairingsError.message)
-        }
+        if (insertPairingsError) throw new Error(insertPairingsError.message)
       }
 
-      const { error: deleteConstraintsError } = await supabase
-        .from('pairing_constraints')
-        .delete()
-        .eq('round_id', roundId)
+      const { error: deleteConstraintsError } = await supabase.from('pairing_constraints').delete().eq('round_id', roundId)
+      if (deleteConstraintsError) throw new Error(deleteConstraintsError.message)
 
-      if (deleteConstraintsError) {
-        throw new Error(deleteConstraintsError.message)
-      }
-
-      const constraintsPayload = pairingConstraints.map((entry) => ({
-        round_id: roundId,
-        constraint_type: entry.constraintType,
-        player_a_id: entry.playerAId,
-        player_b_id: entry.playerBId,
-        created_by: user.id,
-      }))
-
+      const constraintsPayload = pairingConstraints.map((entry) => ({ round_id: roundId, constraint_type: entry.constraintType, player_a_id: entry.playerAId, player_b_id: entry.playerBId, created_by: user.id }))
       if (constraintsPayload.length > 0) {
-        const { error: insertConstraintsError } = await supabase
-          .from('pairing_constraints')
-          .insert(constraintsPayload)
-        if (insertConstraintsError) {
-          throw new Error(insertConstraintsError.message)
-        }
+        const { error: insertConstraintsError } = await supabase.from('pairing_constraints').insert(constraintsPayload)
+        if (insertConstraintsError) throw new Error(insertConstraintsError.message)
       }
 
       if (session?.status === 'open') {
-        const { error: sessionError } = await supabase
-          .from('club_sessions')
-          .update({ status: 'pairing_ready' })
-          .eq('id', session.id)
-
-        if (sessionError) {
-          throw new Error(sessionError.message)
-        }
+        const { error: sessionError } = await supabase.from('club_sessions').update({ status: 'pairing_ready' }).eq('id', session.id)
+        if (sessionError) throw new Error(sessionError.message)
       }
 
       await loadData()
@@ -561,7 +402,6 @@ export function AdminSessionPage() {
 
     const validationErrors = validateProposal(proposalPairings)
     setPairingValidationErrors(validationErrors)
-
     if (validationErrors.length > 0) {
       setError('Fix validation errors before publishing.')
       return
@@ -573,9 +413,7 @@ export function AdminSessionPage() {
     const [{ error: roundError }, { error: pairingsError }, { error: sessionError }] = await Promise.all([
       supabase.from('rounds').update({ status: 'published' }).eq('id', activeRound.id),
       supabase.from('pairings').update({ state: 'published' }).eq('round_id', activeRound.id).eq('state', 'proposed'),
-      session
-        ? supabase.from('club_sessions').update({ status: 'in_round' }).eq('id', session.id)
-        : Promise.resolve({ error: null }),
+      session ? supabase.from('club_sessions').update({ status: 'in_round' }).eq('id', session.id) : Promise.resolve({ error: null }),
     ])
 
     if (roundError || pairingsError || sessionError) {
@@ -588,34 +426,198 @@ export function AdminSessionPage() {
     setIsPublishingRound(false)
   }
 
+  const handleSaveAdminResultOverride = async (pairingId: string) => {
+    if (!user) return
+    const resultCode = resultByPairingId[pairingId]
+    if (!resultCode) {
+      setError('Pick a result first.')
+      return
+    }
+
+    setIsSavingOverride(true)
+    setError(null)
+    const { error: upsertError } = await supabase.from('results').upsert(
+      { pairing_id: pairingId, result_code: resultCode, submitted_by: user.id, is_admin_override: true },
+      { onConflict: 'pairing_id' },
+    )
+
+    if (upsertError) {
+      setError(upsertError.message)
+      setIsSavingOverride(false)
+      return
+    }
+
+    await loadData()
+    setIsSavingOverride(false)
+  }
+
+  const handleFinalizeRound = async () => {
+    if (!session || !activeRound || !user) return
+    if (activeRound.status !== 'published') {
+      setError('Only a published round can be finalized.')
+      return
+    }
+
+    if (publishedPairings.length === 0) {
+      setError('No published boards found to finalize.')
+      return
+    }
+
+    const missing = publishedPairings.filter((pairing) => !resultByPairingId[pairing.id])
+    if (missing.length > 0) {
+      setError(`All boards must have results (or be void). Missing board(s): ${missing.map((p) => p.board_number).join(', ')}`)
+      return
+    }
+
+    setIsFinalizingRound(true)
+    setError(null)
+
+    const ranking = [...players]
+    const rankByPlayerId = new Map<string, number>()
+    ranking.forEach((player, index) => {
+      rankByPlayerId.set(player.id, index + 1)
+    })
+
+    for (const pairing of [...publishedPairings].sort((a, b) => a.board_number - b.board_number)) {
+      const result = resultByPairingId[pairing.id]
+      if (!result || result === 'void' || result === '1/2-1/2') continue
+
+      const whiteIndex = ranking.findIndex((player) => player.id === pairing.white_player_id)
+      const blackIndex = ranking.findIndex((player) => player.id === pairing.black_player_id)
+      if (whiteIndex < 0 || blackIndex < 0) continue
+
+      const winnerId = result === '1-0' ? pairing.white_player_id : pairing.black_player_id
+      const loserId = result === '1-0' ? pairing.black_player_id : pairing.white_player_id
+      const winnerIndex = ranking.findIndex((player) => player.id === winnerId)
+      const loserIndex = ranking.findIndex((player) => player.id === loserId)
+
+      if (winnerIndex > loserIndex) {
+        const [winner] = ranking.splice(winnerIndex, 1)
+        ranking.splice(loserIndex, 0, winner)
+      }
+    }
+
+    ranking.forEach((player, index) => {
+      rankByPlayerId.set(player.id, index + 1)
+    })
+
+    const historyPayload = publishedPairings.map((pairing) => ({
+      session_id: session.id,
+      round_id: activeRound.id,
+      white_player_id: pairing.white_player_id,
+      black_player_id: pairing.black_player_id,
+      result_code: resultByPairingId[pairing.id],
+    }))
+
+    const [{ data: existingHistory, error: historyReadError }, { data: existingSnapshots, error: snapshotReadError }] = await Promise.all([
+      supabase.from('pairing_history').select('id,white_player_id,black_player_id').eq('round_id', activeRound.id),
+      supabase.from('ladder_snapshots').select('id').eq('round_id', activeRound.id).limit(1),
+    ])
+
+    if (historyReadError || snapshotReadError) {
+      setError(historyReadError?.message ?? snapshotReadError?.message ?? 'Failed to check finalize state.')
+      setIsFinalizingRound(false)
+      return
+    }
+
+    const existingHistoryKeys = new Set((existingHistory ?? []).map((row) => `${row.white_player_id}:${row.black_player_id}`))
+    const historyToInsert = historyPayload.filter((entry) => !existingHistoryKeys.has(`${entry.white_player_id}:${entry.black_player_id}`))
+
+    if (historyToInsert.length > 0) {
+      const { error: historyInsertError } = await supabase.from('pairing_history').insert(historyToInsert)
+      if (historyInsertError) {
+        setError(historyInsertError.message)
+        setIsFinalizingRound(false)
+        return
+      }
+    }
+
+    let snapshotId = existingSnapshots?.[0]?.id ?? null
+    if (!snapshotId) {
+      const snapshotInsert = await supabase.from('ladder_snapshots').insert({ session_id: session.id, round_id: activeRound.id, created_by: user.id }).select('id').single()
+      if (snapshotInsert.error) {
+        setError(snapshotInsert.error.message)
+        setIsFinalizingRound(false)
+        return
+      }
+
+      snapshotId = snapshotInsert.data.id
+    }
+
+    const snapshotEntriesPayload = ranking.map((player, index) => ({ snapshot_id: snapshotId as string, player_id: player.id, rank_position: index + 1 }))
+    const { error: entriesError } = await supabase.from('ladder_snapshot_entries').upsert(snapshotEntriesPayload, { onConflict: 'snapshot_id,player_id' })
+    if (entriesError) {
+      setError(entriesError.message)
+      setIsFinalizingRound(false)
+      return
+    }
+
+    const playerRankUpdates = ranking.map((player, index) =>
+      supabase.from('players').update({ ladder_rank: index + 1 }).eq('id', player.id),
+    )
+
+    const playerRankResults = await Promise.all(playerRankUpdates)
+    const playerRankError = playerRankResults.find((result) => result.error)?.error
+    if (playerRankError) {
+      setError(playerRankError.message)
+      setIsFinalizingRound(false)
+      return
+    }
+
+    const [{ error: roundUpdateError }, { error: pairingsFinishError }] = await Promise.all([
+      supabase.from('rounds').update({ status: 'completed' }).eq('id', activeRound.id),
+      supabase.from('pairings').update({ state: 'finished' }).eq('round_id', activeRound.id).in('id', publishedPairings.map((pairing) => pairing.id)),
+    ])
+
+    if (roundUpdateError || pairingsFinishError) {
+      setError(roundUpdateError?.message ?? pairingsFinishError?.message ?? 'Failed to complete round state.')
+      setIsFinalizingRound(false)
+      return
+    }
+
+    const nextRoundResult = await supabase
+      .from('rounds')
+      .select('id')
+      .eq('session_id', session.id)
+      .in('status', ['draft', 'published'])
+      .limit(1)
+
+    if (nextRoundResult.error) {
+      setError(nextRoundResult.error.message)
+      setIsFinalizingRound(false)
+      return
+    }
+
+    if ((nextRoundResult.data ?? []).length === 0) {
+      const { error: completeSessionError } = await supabase.from('club_sessions').update({ status: 'completed' }).eq('id', session.id)
+      if (completeSessionError) {
+        setError(completeSessionError.message)
+        setIsFinalizingRound(false)
+        return
+      }
+    }
+
+    await loadData()
+    setIsFinalizingRound(false)
+  }
+
   const handleAddConstraint = () => {
     if (!constraintForm.playerAId || !constraintForm.playerBId) {
       setError('Choose both players before adding a constraint.')
       return
     }
-
     if (constraintForm.playerAId === constraintForm.playerBId) {
       setError('Constraint players must be different.')
       return
     }
 
     setError(null)
-    setPairingConstraints((current) => [
-      ...current,
-      {
-        constraintType: constraintForm.constraintType,
-        playerAId: constraintForm.playerAId,
-        playerBId: constraintForm.playerBId,
-      },
-    ])
+    setPairingConstraints((current) => [...current, { constraintType: constraintForm.constraintType, playerAId: constraintForm.playerAId, playerBId: constraintForm.playerBId }])
     setConstraintForm(defaultConstraintForm)
   }
 
   const handleCopyShareText = async () => {
-    if (!shareText) {
-      return
-    }
-
+    if (!shareText) return
     await navigator.clipboard.writeText(shareText)
   }
 
@@ -626,9 +628,7 @@ export function AdminSessionPage() {
         <p>Manage check-in and pairing generation for tonight&apos;s round.</p>
 
         <div className="session-status-row">
-          <StatusBadge status={session ? 'success' : 'warning'}>
-            {session ? `Session ${session.status}` : 'No open session'}
-          </StatusBadge>
+          <StatusBadge status={session ? 'success' : 'warning'}>{session ? `Session ${session.status}` : 'No open session'}</StatusBadge>
           <Button disabled={Boolean(session) || isOpeningSession} onClick={() => void handleOpenSession()}>
             {isOpeningSession ? 'Opening...' : 'Open Session'}
           </Button>
@@ -637,7 +637,6 @@ export function AdminSessionPage() {
         {session && (
           <>
             <p className="page-message">Session date: {session.session_date}</p>
-
             <div className="attendance-summary">
               <span>Present: {presentCount}</span>
               <span>Available: {availableCount}</span>
@@ -652,34 +651,15 @@ export function AdminSessionPage() {
               </div>
 
               {players.map((player) => {
-                const playerAttendance = attendanceByPlayerId[player.id] ?? {
-                  isPresent: false,
-                  isAvailable: false,
-                }
-
+                const playerAttendance = attendanceByPlayerId[player.id] ?? { isPresent: false, isAvailable: false }
                 return (
                   <div className="attendance-grid-row" role="row" key={player.id}>
-                    <span>
-                      #{player.ladder_rank} {player.full_name}
-                    </span>
+                    <span>#{player.ladder_rank} {player.full_name}</span>
                     <label className="attendance-toggle">
-                      <input
-                        type="checkbox"
-                        checked={playerAttendance.isPresent}
-                        onChange={(event) =>
-                          handleAttendanceToggle(player.id, 'isPresent', event.target.checked)
-                        }
-                      />
+                      <input type="checkbox" checked={playerAttendance.isPresent} onChange={(event) => handleAttendanceToggle(player.id, 'isPresent', event.target.checked)} />
                     </label>
                     <label className="attendance-toggle">
-                      <input
-                        type="checkbox"
-                        checked={playerAttendance.isAvailable}
-                        disabled={!playerAttendance.isPresent}
-                        onChange={(event) =>
-                          handleAttendanceToggle(player.id, 'isAvailable', event.target.checked)
-                        }
-                      />
+                      <input type="checkbox" checked={playerAttendance.isAvailable} disabled={!playerAttendance.isPresent} onChange={(event) => handleAttendanceToggle(player.id, 'isAvailable', event.target.checked)} />
                     </label>
                   </div>
                 )
@@ -687,9 +667,7 @@ export function AdminSessionPage() {
             </div>
 
             <div className="button-row">
-              <Button disabled={isSavingAttendance} onClick={() => void handleSaveAttendance()}>
-                {isSavingAttendance ? 'Saving...' : 'Save attendance'}
-              </Button>
+              <Button disabled={isSavingAttendance} onClick={() => void handleSaveAttendance()}>{isSavingAttendance ? 'Saving...' : 'Save attendance'}</Button>
             </div>
 
             <section className="pairing-editor">
@@ -700,196 +678,82 @@ export function AdminSessionPage() {
                   <StatusBadge status={getRoundStatusBadgeStatus(activeRound.status)}>{activeRound.status}</StatusBadge>
                 </div>
               )}
+
               <div className="button-row">
-                <Button
-                  variant="secondary"
-                  disabled={availableCount < 2}
-                  onClick={() => handleGenerateProposal()}
-                >
-                  Generate proposal
-                </Button>
-                <Button
-                  disabled={isSavingDraft || proposalPairings.length === 0 || activeRound?.status === 'published'}
-                  onClick={() => void handleSaveDraft()}
-                >
-                  {isSavingDraft ? 'Saving draft...' : 'Save draft round'}
-                </Button>
-                <Button
-                  variant="secondary"
-                  disabled={isPublishingRound || activeRound?.status !== 'draft' || proposalPairings.length === 0}
-                  onClick={() => void handlePublishRound()}
-                >
-                  {isPublishingRound ? 'Publishing...' : 'Publish round'}
-                </Button>
-                <Button variant="secondary" disabled={!shareText} onClick={() => void handleCopyShareText()}>
-                  Copy WhatsApp share text
-                </Button>
-                {shareText && (
-                  <a
-                    className="btn btn-secondary"
-                    href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Open in WhatsApp
-                  </a>
-                )}
+                <Button variant="secondary" disabled={availableCount < 2} onClick={() => handleGenerateProposal()}>Generate proposal</Button>
+                <Button disabled={isSavingDraft || proposalPairings.length === 0 || activeRound?.status === 'published'} onClick={() => void handleSaveDraft()}>{isSavingDraft ? 'Saving draft...' : 'Save draft round'}</Button>
+                <Button variant="secondary" disabled={isPublishingRound || activeRound?.status !== 'draft' || proposalPairings.length === 0} onClick={() => void handlePublishRound()}>{isPublishingRound ? 'Publishing...' : 'Publish round'}</Button>
+                <Button variant="secondary" disabled={!shareText} onClick={() => void handleCopyShareText()}>Copy WhatsApp share text</Button>
+                {shareText && <a className="btn btn-secondary" href={`https://wa.me/?text=${encodeURIComponent(shareText)}`} rel="noreferrer" target="_blank">Open in WhatsApp</a>}
               </div>
 
-              {pairingWarnings.length > 0 && (
-                <ul className="pairing-note-list">
-                  {pairingWarnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
-              )}
-
-              {pairingValidationErrors.length > 0 && (
-                <ul className="pairing-error-list">
-                  {pairingValidationErrors.map((validationError) => (
-                    <li key={validationError}>{validationError}</li>
-                  ))}
-                </ul>
-              )}
+              {pairingWarnings.length > 0 && <ul className="pairing-note-list">{pairingWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+              {pairingValidationErrors.length > 0 && <ul className="pairing-error-list">{pairingValidationErrors.map((validationError) => <li key={validationError}>{validationError}</li>)}</ul>}
 
               <div className="pairing-grid" role="table" aria-label="Pairing proposal table">
-                <div className="pairing-grid-row pairing-grid-header" role="row">
-                  <span>Board</span>
-                  <span>White</span>
-                  <span>Black</span>
-                  <span>Actions</span>
-                </div>
-
+                <div className="pairing-grid-row pairing-grid-header" role="row"><span>Board</span><span>White</span><span>Black</span><span>Actions</span></div>
                 {proposalPairings.map((pairing, index) => (
                   <div className="pairing-grid-row" role="row" key={`${pairing.boardNumber}-${index}`}>
-                    <input
-                      type="number"
-                      min={1}
-                      value={pairing.boardNumber}
-                      onChange={(event) =>
-                        handlePairingChange(index, 'boardNumber', Number.parseInt(event.target.value, 10) || 1)
-                      }
-                    />
-                    <select
-                      value={pairing.whitePlayerId}
-                      onChange={(event) => handlePairingChange(index, 'whitePlayerId', event.target.value)}
-                    >
+                    <input type="number" min={1} value={pairing.boardNumber} onChange={(event) => handlePairingChange(index, 'boardNumber', Number.parseInt(event.target.value, 10) || 1)} />
+                    <select value={pairing.whitePlayerId} onChange={(event) => handlePairingChange(index, 'whitePlayerId', event.target.value)}>
                       <option value="">Select player</option>
-                      {availablePlayerIds.map((playerId) => (
-                        <option key={`${playerId}-white`} value={playerId}>
-                          {playerNameById.get(playerId)}
-                        </option>
-                      ))}
+                      {availablePlayerIds.map((playerId) => <option key={`${playerId}-white`} value={playerId}>{playerNameById.get(playerId)}</option>)}
                     </select>
-                    <select
-                      value={pairing.blackPlayerId}
-                      onChange={(event) => handlePairingChange(index, 'blackPlayerId', event.target.value)}
-                    >
+                    <select value={pairing.blackPlayerId} onChange={(event) => handlePairingChange(index, 'blackPlayerId', event.target.value)}>
                       <option value="">Select player</option>
-                      {availablePlayerIds.map((playerId) => (
-                        <option key={`${playerId}-black`} value={playerId}>
-                          {playerNameById.get(playerId)}
-                        </option>
-                      ))}
+                      {availablePlayerIds.map((playerId) => <option key={`${playerId}-black`} value={playerId}>{playerNameById.get(playerId)}</option>)}
                     </select>
-                    <Button
-                      variant="secondary"
-                      onClick={() =>
-                        setProposalPairings((current) => current.filter((_, currentIndex) => currentIndex !== index))
-                      }
-                    >
-                      Remove
-                    </Button>
+                    <Button variant="secondary" onClick={() => setProposalPairings((current) => current.filter((_, currentIndex) => currentIndex !== index))}>Remove</Button>
                   </div>
                 ))}
               </div>
 
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  setProposalPairings((current) => [
-                    ...current,
-                    { boardNumber: current.length + 1, whitePlayerId: '', blackPlayerId: '' },
-                  ])
-                }
-              >
-                Add board pairing
-              </Button>
+              <Button variant="secondary" onClick={() => setProposalPairings((current) => [...current, { boardNumber: current.length + 1, whitePlayerId: '', blackPlayerId: '' }])}>Add board pairing</Button>
 
               <div className="constraints-panel">
                 <h4>Pairing constraints</h4>
                 <div className="constraints-form">
-                  <select
-                    value={constraintForm.constraintType}
-                    onChange={(event) =>
-                      setConstraintForm((current) => ({
-                        ...current,
-                        constraintType: event.target.value as PairingConstraint['constraintType'],
-                      }))
-                    }
-                  >
-                    <option value="force_pair">force_pair</option>
-                    <option value="forbid_pair">forbid_pair</option>
-                  </select>
-                  <select
-                    value={constraintForm.playerAId}
-                    onChange={(event) =>
-                      setConstraintForm((current) => ({ ...current, playerAId: event.target.value }))
-                    }
-                  >
-                    <option value="">Player A</option>
-                    {availablePlayerIds.map((playerId) => (
-                      <option key={`${playerId}-constraint-a`} value={playerId}>
-                        {playerNameById.get(playerId)}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={constraintForm.playerBId}
-                    onChange={(event) =>
-                      setConstraintForm((current) => ({ ...current, playerBId: event.target.value }))
-                    }
-                  >
-                    <option value="">Player B</option>
-                    {availablePlayerIds.map((playerId) => (
-                      <option key={`${playerId}-constraint-b`} value={playerId}>
-                        {playerNameById.get(playerId)}
-                      </option>
-                    ))}
-                  </select>
-                  <Button variant="secondary" onClick={() => handleAddConstraint()}>
-                    Add constraint
-                  </Button>
+                  <select value={constraintForm.constraintType} onChange={(event) => setConstraintForm((current) => ({ ...current, constraintType: event.target.value as PairingConstraint['constraintType'] }))}><option value="force_pair">force_pair</option><option value="forbid_pair">forbid_pair</option></select>
+                  <select value={constraintForm.playerAId} onChange={(event) => setConstraintForm((current) => ({ ...current, playerAId: event.target.value }))}><option value="">Player A</option>{availablePlayerIds.map((playerId) => <option key={`${playerId}-constraint-a`} value={playerId}>{playerNameById.get(playerId)}</option>)}</select>
+                  <select value={constraintForm.playerBId} onChange={(event) => setConstraintForm((current) => ({ ...current, playerBId: event.target.value }))}><option value="">Player B</option>{availablePlayerIds.map((playerId) => <option key={`${playerId}-constraint-b`} value={playerId}>{playerNameById.get(playerId)}</option>)}</select>
+                  <Button variant="secondary" onClick={() => handleAddConstraint()}>Add constraint</Button>
                 </div>
 
                 <ul className="constraint-list">
                   {pairingConstraints.map((constraint, index) => (
                     <li key={`${constraint.constraintType}-${constraint.playerAId}-${constraint.playerBId}-${index}`}>
-                      <span>
-                        {constraint.constraintType}: {playerNameById.get(constraint.playerAId)} ↔{' '}
-                        {playerNameById.get(constraint.playerBId)}
-                      </span>
-                      <Button
-                        variant="secondary"
-                        onClick={() =>
-                          setPairingConstraints((current) =>
-                            current.filter((_, currentIndex) => currentIndex !== index),
-                          )
-                        }
-                      >
-                        Remove
-                      </Button>
+                      <span>{constraint.constraintType}: {playerNameById.get(constraint.playerAId)} ↔ {playerNameById.get(constraint.playerBId)}</span>
+                      <Button variant="secondary" onClick={() => setPairingConstraints((current) => current.filter((_, currentIndex) => currentIndex !== index))}>Remove</Button>
                     </li>
                   ))}
                 </ul>
               </div>
             </section>
 
-            {availableCount < 2 && (
-              <p className="page-message page-message-error">
-                You need at least 2 available players before pairing generation.
-              </p>
+            {activeRound?.status === 'published' && (
+              <section className="pairing-editor">
+                <h3>Admin result override</h3>
+                <p className="page-message">Set any board result with admin override before finalizing.</p>
+                <div className="result-grid" role="table" aria-label="Admin results override table">
+                  <div className="result-grid-row result-grid-header" role="row"><span>Board</span><span>Pairing</span><span>Result</span><span>Actions</span></div>
+                  {publishedPairings.map((pairing) => (
+                    <div className="result-grid-row" role="row" key={pairing.id}>
+                      <span>Board {pairing.board_number}</span>
+                      <span>{playerNameById.get(pairing.white_player_id)} vs {playerNameById.get(pairing.black_player_id)}</span>
+                      <select value={resultByPairingId[pairing.id] ?? '1/2-1/2'} onChange={(event) => setResultByPairingId((current) => ({ ...current, [pairing.id]: event.target.value as ResultCode }))}>
+                        {resultOptions.map((option) => <option key={`${pairing.id}-${option.value}`} value={option.value}>{option.label}</option>)}
+                      </select>
+                      <Button variant="secondary" disabled={isSavingOverride} onClick={() => void handleSaveAdminResultOverride(pairing.id)}>{isSavingOverride ? 'Saving...' : 'Override result'}</Button>
+                    </div>
+                  ))}
+                </div>
+                <div className="button-row">
+                  <Button disabled={isFinalizingRound || publishedPairings.length === 0} onClick={() => void handleFinalizeRound()}>{isFinalizingRound ? 'Finalizing...' : 'Finalize round'}</Button>
+                </div>
+              </section>
             )}
+
+            {availableCount < 2 && <p className="page-message page-message-error">You need at least 2 available players before pairing generation.</p>}
           </>
         )}
       </PageState>
