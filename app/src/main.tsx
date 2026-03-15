@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createBrowserRouter, RouterProvider } from 'react-router-dom'
+import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import { AppLayout } from './layouts/AppLayout'
@@ -10,7 +10,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { LadderPage } from './pages/LadderPage'
 import { LoginPage } from './pages/LoginPage'
 
-const router = createBrowserRouter([
+const router = createHashRouter([
   {
     path: '/',
     element: <AppLayout />,
