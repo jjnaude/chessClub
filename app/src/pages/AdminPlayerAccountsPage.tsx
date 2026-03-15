@@ -30,10 +30,13 @@ export function AdminPlayerAccountsPage() {
   const [selectedUser, setSelectedUser] = useState('')
   const [newPlayerName, setNewPlayerName] = useState('')
   const [newPlayerNotes, setNewPlayerNotes] = useState('')
+  const [selectedRankPlayer, setSelectedRankPlayer] = useState('')
+  const [targetRank, setTargetRank] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [isCreatingPlayer, setIsCreatingPlayer] = useState(false)
+  const [isUpdatingRank, setIsUpdatingRank] = useState(false)
 
   const loadData = useCallback(async () => {
     setError(null)
@@ -137,6 +140,76 @@ export function AdminPlayerAccountsPage() {
     setIsSaving(false)
   }
 
+  const handleRankUpdate = async (event: FormEvent) => {
+    event.preventDefault()
+
+    if (!selectedRankPlayer || !targetRank) {
+      return
+    }
+
+    const parsedRank = Number(targetRank)
+    if (!Number.isInteger(parsedRank)) {
+      setError('Rank must be a whole number.')
+      return
+    }
+
+    const playersByRank = [...players].sort((left, right) => left.ladder_rank - right.ladder_rank)
+    const boundedTargetRank = Math.min(Math.max(parsedRank, 1), playersByRank.length)
+    const selected = playersByRank.find((player) => player.id === selectedRankPlayer)
+
+    if (!selected) {
+      setError('Selected player could not be found.')
+      return
+    }
+
+    if (selected.ladder_rank === boundedTargetRank) {
+      setTargetRank(String(boundedTargetRank))
+      return
+    }
+
+    const updates = playersByRank
+      .map((player) => {
+        if (player.id === selected.id) {
+          return { id: player.id, ladder_rank: boundedTargetRank }
+        }
+
+        if (boundedTargetRank < selected.ladder_rank) {
+          if (player.ladder_rank >= boundedTargetRank && player.ladder_rank < selected.ladder_rank) {
+            return { id: player.id, ladder_rank: player.ladder_rank + 1 }
+          }
+          return null
+        }
+
+        if (player.ladder_rank <= boundedTargetRank && player.ladder_rank > selected.ladder_rank) {
+          return { id: player.id, ladder_rank: player.ladder_rank - 1 }
+        }
+
+        return null
+      })
+      .filter((value): value is { id: string; ladder_rank: number } => value !== null)
+
+    setIsUpdatingRank(true)
+    setError(null)
+
+    for (const update of updates) {
+      const { error: updateError } = await supabase
+        .from('players')
+        .update({ ladder_rank: update.ladder_rank })
+        .eq('id', update.id)
+
+      if (updateError) {
+        setError(updateError.message)
+        setIsUpdatingRank(false)
+        return
+      }
+    }
+
+    setTargetRank('')
+    setSelectedRankPlayer('')
+    await loadData()
+    setIsUpdatingRank(false)
+  }
+
   const handleDelete = async (playerId: string, userId: string) => {
     setError(null)
     const { error: deleteError } = await supabase
@@ -212,6 +285,43 @@ export function AdminPlayerAccountsPage() {
 
           <Button disabled={isSaving} type="submit">
             {isSaving ? 'Saving...' : 'Add mapping'}
+          </Button>
+        </form>
+
+        <form className="auth-form" onSubmit={handleRankUpdate}>
+          <label>
+            Player to re-rank
+            <select
+              required
+              value={selectedRankPlayer}
+              onChange={(event) => setSelectedRankPlayer(event.target.value)}
+            >
+              <option value="">Select a player</option>
+              {[...players]
+                .sort((left, right) => left.ladder_rank - right.ladder_rank)
+                .map((player) => (
+                  <option key={player.id} value={player.id}>
+                    #{player.ladder_rank} {player.full_name}
+                  </option>
+                ))}
+            </select>
+          </label>
+
+          <label>
+            New ladder rank
+            <input
+              required
+              min={1}
+              max={Math.max(players.length, 1)}
+              step={1}
+              type="number"
+              value={targetRank}
+              onChange={(event) => setTargetRank(event.target.value)}
+            />
+          </label>
+
+          <Button disabled={isUpdatingRank} type="submit">
+            {isUpdatingRank ? 'Updating rank...' : 'Update rank'}
           </Button>
         </form>
 
