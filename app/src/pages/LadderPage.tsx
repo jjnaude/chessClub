@@ -79,7 +79,8 @@ export function LadderPage() {
     }
 
     const mappedEntries = (entriesResult.data ?? []).map((row) => {
-      const player = (row.players as { id: string; full_name: string }[] | null)?.[0] ?? null
+      const playerRelation = row.players as { id: string; full_name: string } | { id: string; full_name: string }[] | null
+      const player = Array.isArray(playerRelation) ? (playerRelation[0] ?? null) : playerRelation
       return {
         player_id: row.player_id,
         rank_position: row.rank_position,

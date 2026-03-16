@@ -213,7 +213,11 @@ export function AdminSessionPage() {
     }
 
     const mappedPlayers: Player[] = (playersResult.data ?? []).map((row) => {
-      const player = (row.players as { id: string; full_name: string; updated_at: string }[] | null)?.[0] ?? null
+      const playerRelation = row.players as
+        | { id: string; full_name: string; updated_at: string }
+        | { id: string; full_name: string; updated_at: string }[]
+        | null
+      const player = Array.isArray(playerRelation) ? (playerRelation[0] ?? null) : playerRelation
       return {
         id: row.player_id,
         full_name: player?.full_name ?? row.player_id,
