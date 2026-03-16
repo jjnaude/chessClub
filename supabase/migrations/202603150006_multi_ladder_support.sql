@@ -27,7 +27,14 @@ alter table public.ladder_snapshots
   add column if not exists ladder_id uuid references public.ladders(id);
 
 insert into public.ladders (name, description, created_by, updated_by)
-select 'Classic', 'Default ladder migrated from players.ladder_rank', auth.uid(), auth.uid()
+select
+  'Classic',
+  'Default ladder migrated from players.ladder_rank',
+  default_actor.id,
+  default_actor.id
+from (
+  select coalesce(auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1)) as id
+) as default_actor
 where not exists (select 1 from public.ladders);
 
 insert into public.ladder_rankings (ladder_id, player_id, rank_position)
@@ -119,6 +126,7 @@ set search_path = public
 as $$
 declare
   new_ladder_id uuid;
+  effective_actor_id uuid;
 begin
   if not public.is_admin() then
     raise exception 'Only admins can create ladders.';
@@ -128,18 +136,29 @@ begin
     raise exception 'Ladder name is required.';
   end if;
 
+  effective_actor_id := coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1));
+
+  if effective_actor_id is null then
+    raise exception 'Unable to determine actor id for ladder changes.';
+  end if;
+
   insert into public.ladders (name, description, created_by, updated_by)
-  values (trim(ladder_name), nullif(trim(coalesce(ladder_description, '')), ''), coalesce(actor_id, auth.uid()), coalesce(actor_id, auth.uid()))
+  values (
+    trim(ladder_name),
+    nullif(trim(coalesce(ladder_description, '')), ''),
+    effective_actor_id,
+    effective_actor_id
+  )
   returning id into new_ladder_id;
 
   if source_ladder_id is not null then
     insert into public.ladder_rankings (ladder_id, player_id, rank_position, updated_by)
-    select new_ladder_id, lr.player_id, lr.rank_position, coalesce(actor_id, auth.uid())
+    select new_ladder_id, lr.player_id, lr.rank_position, effective_actor_id
     from public.ladder_rankings lr
     where lr.ladder_id = source_ladder_id;
   else
     insert into public.ladder_rankings (ladder_id, player_id, rank_position, updated_by)
-    select new_ladder_id, p.id, row_number() over (order by p.full_name asc), coalesce(actor_id, auth.uid())
+    select new_ladder_id, p.id, row_number() over (order by p.full_name asc), effective_actor_id
     from public.players p
     where p.active = true;
   end if;
@@ -165,9 +184,16 @@ declare
   selected_rank integer;
   max_rank integer;
   bounded_target integer;
+  effective_actor_id uuid;
 begin
   if not public.is_admin() then
     raise exception 'Only admins can reorder ladder ranks.';
+  end if;
+
+  effective_actor_id := coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1));
+
+  if effective_actor_id is null then
+    raise exception 'Unable to determine actor id for ladder changes.';
   end if;
 
   select rank_position
@@ -193,21 +219,21 @@ begin
 
   update public.ladder_rankings
   set rank_position = max_rank + 1,
-      updated_by = coalesce(actor_id, auth.uid())
+      updated_by = effective_actor_id
   where ladder_id = target_ladder_id
     and player_id = target_player_id;
 
   if bounded_target < selected_rank then
     update public.ladder_rankings
     set rank_position = rank_position + 1,
-        updated_by = coalesce(actor_id, auth.uid())
+        updated_by = effective_actor_id
     where ladder_id = target_ladder_id
       and rank_position >= bounded_target
       and rank_position < selected_rank;
   else
     update public.ladder_rankings
     set rank_position = rank_position - 1,
-        updated_by = coalesce(actor_id, auth.uid())
+        updated_by = effective_actor_id
     where ladder_id = target_ladder_id
       and rank_position <= bounded_target
       and rank_position > selected_rank;
@@ -215,7 +241,7 @@ begin
 
   update public.ladder_rankings
   set rank_position = bounded_target,
-      updated_by = coalesce(actor_id, auth.uid())
+      updated_by = effective_actor_id
   where ladder_id = target_ladder_id
     and player_id = target_player_id;
 end;
