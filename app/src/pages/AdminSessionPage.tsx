@@ -18,14 +18,22 @@ type Session = {
   id: string
   session_date: string
   status: 'open' | 'pairing_ready' | 'in_round' | 'completed'
+  ladder_id: string
   updated_at: string
+  ladders: { name: string }[] | null
 }
 
 type Player = {
   id: string
   full_name: string
   ladder_rank: number
-  updated_at: string
+  player_updated_at: string
+  ranking_updated_at: string
+}
+
+type Ladder = {
+  id: string
+  name: string
 }
 
 type AttendanceRow = {
@@ -118,6 +126,8 @@ function validateProposal(proposal: PairingProposal[]) {
 export function AdminSessionPage() {
   const { user } = useAuth()
   const [session, setSession] = useState<Session | null>(null)
+  const [ladders, setLadders] = useState<Ladder[]>([])
+  const [selectedLadderId, setSelectedLadderId] = useState('')
   const [players, setPlayers] = useState<Player[]>([])
   const [attendanceByPlayerId, setAttendanceByPlayerId] = useState<Record<string, AttendanceState>>({})
   const [pairingHistory, setPairingHistory] = useState<PairingHistoryEntry[]>([])
@@ -147,11 +157,10 @@ export function AdminSessionPage() {
   const loadData = useCallback(async () => {
     setError(null)
 
-    const [playersResult, sessionResult, historyResult] = await Promise.all([
-      supabase.from('players').select('id,full_name,ladder_rank,updated_at').eq('active', true).order('ladder_rank'),
+    const [sessionResult, historyResult, laddersResult] = await Promise.all([
       supabase
         .from('club_sessions')
-        .select('id,session_date,status,updated_at')
+        .select('id,session_date,status,ladder_id,updated_at,ladders(name)')
         .in('status', ['open', 'pairing_ready', 'in_round'])
         .order('session_date', { ascending: false })
         .limit(1)
@@ -161,18 +170,59 @@ export function AdminSessionPage() {
         .select('white_player_id,black_player_id,played_at')
         .order('played_at', { ascending: false })
         .limit(400),
+      supabase.from('ladders').select('id,name').order('name'),
     ])
 
-    if (playersResult.error || sessionResult.error || historyResult.error) {
-      setError(playersResult.error?.message ?? sessionResult.error?.message ?? historyResult.error?.message ?? 'Failed to load')
+    if (sessionResult.error || historyResult.error || laddersResult.error) {
+      setError(sessionResult.error?.message ?? historyResult.error?.message ?? laddersResult.error?.message ?? 'Failed to load')
       return
     }
 
-    setPlayers(playersResult.data)
+    const availableLadders = (laddersResult.data ?? []) as Ladder[]
+    setLadders(availableLadders)
     setSession(sessionResult.data)
+    setSelectedLadderId((current) => sessionResult.data?.ladder_id ?? current ?? availableLadders[0]?.id ?? '')
     setPairingHistory(
       historyResult.data.map((row) => ({ whitePlayerId: row.white_player_id, blackPlayerId: row.black_player_id, playedAt: row.played_at })),
     )
+
+    const effectiveLadderId = sessionResult.data?.ladder_id ?? availableLadders[0]?.id
+    if (!effectiveLadderId) {
+      setPlayers([])
+      setAttendanceByPlayerId({})
+      setAttendanceUpdatedAtByPlayerId({})
+      setActiveRound(null)
+      setProposalPairings([])
+      setPairingConstraints([])
+      setPublishedPairings([])
+      setPairingUpdatedAtById({})
+      setResultByPairingId({})
+      return
+    }
+
+    const playersResult = await supabase
+      .from('ladder_rankings')
+      .select('player_id,rank_position,updated_at,players!inner(id,full_name,active,updated_at)')
+      .eq('ladder_id', effectiveLadderId)
+      .eq('players.active', true)
+      .order('rank_position', { ascending: true })
+
+    if (playersResult.error) {
+      setError(playersResult.error.message)
+      return
+    }
+
+    const mappedPlayers: Player[] = (playersResult.data ?? []).map((row) => {
+      const player = (row.players as { id: string; full_name: string; updated_at: string }[] | null)?.[0] ?? null
+      return {
+        id: row.player_id,
+        full_name: player?.full_name ?? row.player_id,
+        ladder_rank: row.rank_position,
+        player_updated_at: player?.updated_at ?? row.updated_at,
+        ranking_updated_at: row.updated_at,
+      }
+    })
+    setPlayers(mappedPlayers)
 
     if (!sessionResult.data) {
       setAttendanceByPlayerId({})
@@ -198,9 +248,9 @@ export function AdminSessionPage() {
 
     const nextAttendance: Record<string, AttendanceState> = {}
     const nextAttendanceUpdatedAtByPlayerId: Record<string, string> = {}
-    for (const player of playersResult.data) {
+    for (const player of mappedPlayers) {
       nextAttendance[player.id] = { isPresent: false, isAvailable: false }
-      nextAttendanceUpdatedAtByPlayerId[player.id] = player.updated_at
+      nextAttendanceUpdatedAtByPlayerId[player.id] = player.player_updated_at
     }
     for (const row of attendanceResult.data as AttendanceRow[]) {
       nextAttendance[row.player_id] = { isPresent: row.is_present, isAvailable: row.is_available }
@@ -355,6 +405,10 @@ export function AdminSessionPage() {
 
   const handleOpenSession = async () => {
     if (!user) return
+    if (!selectedLadderId) {
+      setError('Select a ladder before opening a session.')
+      return
+    }
     setIsOpeningSession(true)
     setError(null)
 
@@ -395,7 +449,7 @@ export function AdminSessionPage() {
       return
     }
 
-    const { error: insertError } = await supabase.from('club_sessions').insert({ session_date: today, status: 'open', created_by: user.id, updated_by: user.id })
+    const { error: insertError } = await supabase.from('club_sessions').insert({ session_date: today, status: 'open', ladder_id: selectedLadderId, created_by: user.id, updated_by: user.id })
     if (insertError) {
       if (insertError.code === '23505') {
         setError('A session already exists for today. Reloading current session state.')
@@ -428,7 +482,7 @@ export function AdminSessionPage() {
 
     for (const player of players) {
       const state = attendanceByPlayerId[player.id] ?? { isPresent: false, isAvailable: false }
-      const expectedUpdatedAt = attendanceUpdatedAtByPlayerId[player.id] ?? player.updated_at
+      const expectedUpdatedAt = attendanceUpdatedAtByPlayerId[player.id] ?? player.player_updated_at
       const { data: updatedRows, error: updateError } = await supabase
         .from('attendance')
         .update({
@@ -768,7 +822,7 @@ export function AdminSessionPage() {
 
     let snapshotId = existingSnapshots?.[0]?.id ?? null
     if (!snapshotId) {
-      const snapshotInsert = await supabase.from('ladder_snapshots').insert({ session_id: session.id, round_id: activeRound.id, created_by: user.id, updated_by: user.id }).select('id').single()
+      const snapshotInsert = await supabase.from('ladder_snapshots').insert({ session_id: session.id, round_id: activeRound.id, ladder_id: session.ladder_id, created_by: user.id, updated_by: user.id }).select('id').single()
       if (snapshotInsert.error) {
         setError(snapshotInsert.error.message)
         setIsFinalizingRound(false)
@@ -794,7 +848,13 @@ export function AdminSessionPage() {
     }
 
     const playerRankUpdates = ranking.map((player, index) =>
-      supabase.from('players').update({ ladder_rank: index + 1, updated_by: user.id }).eq('id', player.id).eq('updated_at', player.updated_at).select('id'),
+      supabase
+        .from('ladder_rankings')
+        .update({ rank_position: index + 1, updated_by: user.id })
+        .eq('ladder_id', session.ladder_id)
+        .eq('player_id', player.id)
+        .eq('updated_at', player.ranking_updated_at)
+        .select('player_id'),
     )
 
     const playerRankResults = await Promise.all(playerRankUpdates)
@@ -870,6 +930,22 @@ export function AdminSessionPage() {
       <PageState isLoading={isLoading} error={error}>
         <p>Manage check-in and pairing generation for tonight&apos;s round.</p>
 
+        <label>
+          Session ladder
+          <select
+            value={selectedLadderId}
+            disabled={Boolean(session)}
+            onChange={(event) => setSelectedLadderId(event.target.value)}
+          >
+            <option value="">Select ladder</option>
+            {ladders.map((ladder) => (
+              <option key={ladder.id} value={ladder.id}>
+                {ladder.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <div className="session-status-row">
           <StatusBadge status={session ? 'success' : 'warning'}>{session ? `Session ${session.status}` : 'No open session'}</StatusBadge>
           <Button disabled={Boolean(session) || isOpeningSession} onClick={() => void handleOpenSession()}>
@@ -880,6 +956,7 @@ export function AdminSessionPage() {
         {session && (
           <>
             <p className="page-message">Session date: {session.session_date}</p>
+            <p className="page-message">Ladder: {session.ladders?.[0]?.name ?? 'Unknown ladder'}</p>
             {lockOwnedByCurrentUser && activeRound?.status === 'draft' && <p className="page-message">You hold the draft edit lock.</p>}
             {lockError && <p className="page-message page-message-error">{lockError}</p>}
             {staleWriteError && <p className="page-message page-message-error">{staleWriteError} <Button variant="secondary" onClick={() => void loadData()}>Refresh now</Button></p>}
