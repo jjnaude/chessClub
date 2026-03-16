@@ -388,7 +388,7 @@ export function AdminSessionPage() {
       window.clearInterval(intervalId)
       void releaseLock()
     }
-  }, [activeRound?.id, activeRound?.status, refreshLock, releaseLock, user])
+  }, [activeRound, refreshLock, releaseLock, user])
 
   const availablePlayerIds = useMemo(() => players.filter((p) => attendanceByPlayerId[p.id]?.isAvailable).map((p) => p.id), [attendanceByPlayerId, players])
   const availableCount = availablePlayerIds.length

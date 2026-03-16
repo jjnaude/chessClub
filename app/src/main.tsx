@@ -12,6 +12,7 @@ import { CurrentRoundPage } from './pages/CurrentRoundPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LadderPage } from './pages/LadderPage'
 import { LoginPage } from './pages/LoginPage'
+import { SessionLifecycleSandboxPage } from './pages/SessionLifecycleSandboxPage'
 
 const router = createHashRouter([
   {
@@ -27,6 +28,7 @@ const router = createHashRouter([
         ),
       },
       { path: 'login', element: <LoginPage /> },
+      { path: 'session-lifecycle-sandbox', element: <SessionLifecycleSandboxPage /> },
       {
         path: 'dashboard',
         element: (
