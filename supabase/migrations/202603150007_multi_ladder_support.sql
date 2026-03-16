@@ -77,12 +77,14 @@ alter table public.ladder_snapshots
 alter table public.ladders enable row level security;
 alter table public.ladder_rankings enable row level security;
 
+drop policy if exists "authenticated read ladders" on public.ladders;
 create policy "authenticated read ladders"
   on public.ladders
   for select
   to authenticated
   using (true);
 
+drop policy if exists "admin write ladders" on public.ladders;
 create policy "admin write ladders"
   on public.ladders
   for all
@@ -90,12 +92,14 @@ create policy "admin write ladders"
   using (public.is_admin())
   with check (public.is_admin());
 
+drop policy if exists "authenticated read ladder_rankings" on public.ladder_rankings;
 create policy "authenticated read ladder_rankings"
   on public.ladder_rankings
   for select
   to authenticated
   using (true);
 
+drop policy if exists "admin write ladder_rankings" on public.ladder_rankings;
 create policy "admin write ladder_rankings"
   on public.ladder_rankings
   for all
