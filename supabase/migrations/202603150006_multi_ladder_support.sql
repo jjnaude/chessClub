@@ -27,7 +27,11 @@ alter table public.ladder_snapshots
   add column if not exists ladder_id uuid references public.ladders(id);
 
 insert into public.ladders (name, description, created_by, updated_by)
-select 'Classic', 'Default ladder migrated from players.ladder_rank', auth.uid(), auth.uid()
+select
+  'Classic',
+  'Default ladder migrated from players.ladder_rank',
+  coalesce(auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1)),
+  coalesce(auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
 where not exists (select 1 from public.ladders);
 
 insert into public.ladder_rankings (ladder_id, player_id, rank_position)
@@ -129,17 +133,22 @@ begin
   end if;
 
   insert into public.ladders (name, description, created_by, updated_by)
-  values (trim(ladder_name), nullif(trim(coalesce(ladder_description, '')), ''), coalesce(actor_id, auth.uid()), coalesce(actor_id, auth.uid()))
+  values (
+    trim(ladder_name),
+    nullif(trim(coalesce(ladder_description, '')), ''),
+    coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1)),
+    coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
+  )
   returning id into new_ladder_id;
 
   if source_ladder_id is not null then
     insert into public.ladder_rankings (ladder_id, player_id, rank_position, updated_by)
-    select new_ladder_id, lr.player_id, lr.rank_position, coalesce(actor_id, auth.uid())
+    select new_ladder_id, lr.player_id, lr.rank_position, coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
     from public.ladder_rankings lr
     where lr.ladder_id = source_ladder_id;
   else
     insert into public.ladder_rankings (ladder_id, player_id, rank_position, updated_by)
-    select new_ladder_id, p.id, row_number() over (order by p.full_name asc), coalesce(actor_id, auth.uid())
+    select new_ladder_id, p.id, row_number() over (order by p.full_name asc), coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
     from public.players p
     where p.active = true;
   end if;
@@ -193,21 +202,21 @@ begin
 
   update public.ladder_rankings
   set rank_position = max_rank + 1,
-      updated_by = coalesce(actor_id, auth.uid())
+      updated_by = coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
   where ladder_id = target_ladder_id
     and player_id = target_player_id;
 
   if bounded_target < selected_rank then
     update public.ladder_rankings
     set rank_position = rank_position + 1,
-        updated_by = coalesce(actor_id, auth.uid())
+        updated_by = coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
     where ladder_id = target_ladder_id
       and rank_position >= bounded_target
       and rank_position < selected_rank;
   else
     update public.ladder_rankings
     set rank_position = rank_position - 1,
-        updated_by = coalesce(actor_id, auth.uid())
+        updated_by = coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
     where ladder_id = target_ladder_id
       and rank_position <= bounded_target
       and rank_position > selected_rank;
@@ -215,7 +224,7 @@ begin
 
   update public.ladder_rankings
   set rank_position = bounded_target,
-      updated_by = coalesce(actor_id, auth.uid())
+      updated_by = coalesce(actor_id, auth.uid(), (select u.id from auth.users u order by u.created_at asc limit 1))
   where ladder_id = target_ladder_id
     and player_id = target_player_id;
 end;
